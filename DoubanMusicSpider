@@ -1,0 +1,167 @@
+# import
+import requests
+import re
+from pandas import Series,DataFrame
+import pandas as pd
+import time
+import random
+from fake_useragent import UserAgent
+
+ua = UserAgent()
+headers = {'User-Agent':ua.random}
+
+# Now I want access to douban Folk music 
+genre = "Folk"   # change the genre here
+url = "https://music.douban.com/tag/%s"%genre
+
+# send the request
+response = requests.get(url,headers=headers)
+# change encoding into utf-8
+response.encoding = 'utf-8'
+# now, the response as follow
+momHTML = response.text
+# get genre (prepare for the file name later, or distinguash different genre if more are demanded)
+# genre = re.findall(r'<title>(.*?)</title>', momHTML,re.S)[0]
+# genre = genre.replace('\n','')
+# genre = genre.replace(' ','')
+# genre = genre.replace('豆瓣音乐标签:','')      # don't forget that certain characters can't be used in naming a file
+
+
+
+# part 1: find the album ID and some other general info
+
+# find total pages
+totalPage = re.findall(r'<span class="thispage" data-total-page="(.*?)">1</span>',momHTML)[0]
+totalPage = int(totalPage)
+# set a total page upper limit
+if totalPage > 4:
+	totalPage = 4
+
+#prepare for loop
+album_Info = str()
+# request for lines with album infor in each page
+for i in range(totalPage):
+     page = i*20
+     pageURL = 'https://music.douban.com/tag/%s?start=%s&type=T'%(genre,page)
+     respPage = requests.get(pageURL,headers=headers)
+     time.sleep(random.random())
+     respPage = respPage.text
+     album_Info = album_Info, re.findall(r'<p class="ul first"></p>(.*?)<div class="paginator">',respPage,re.S)[0]      
+
+# convert to str to use replace
+album_Info = str(album_Info)
+f = open(f'{genre}.txt','w',encoding="utf-8")
+f.write(f"{album_Info}\n")
+
+# fetch the data
+album_ID =  re.findall(r'<a href="https://music.douban.com/subject/(.*?)/"',album_Info)
+album_temp = re.findall(r'<a href="https://music.douban.com/subject/(.*?)/" onclick="(.*?)" >(.*?)</a>',album_Info, re.S)
+album_Details = re.findall(r'<p class="pl">(.*?)</p>',album_Info,re.S)
+album_RatingNum = re.findall(r'<span class="pl">(.*?)</span></div>',album_Info,re.S)
+
+# get album name since I can not extract them with re directly :(
+i = 0
+album_Name = [None]*len(album_temp)
+for temp in album_temp:
+	temp1, temp2, album_Name[i] = temp
+	i = i+1
+
+# cleanse the data
+for i in range(len(album_Name)):
+     #album_RatingNum = str(album_RatingNum)
+     album_RatingNum[i] = album_RatingNum[i].replace('\n','')
+     album_RatingNum[i] = album_RatingNum[i].replace('\\','')
+     album_RatingNum[i] = album_RatingNum[i].replace('n','')
+     album_RatingNum[i] = album_RatingNum[i].replace('(','')
+     album_RatingNum[i] = album_RatingNum[i].replace(' ','')
+     album_RatingNum[i] = album_RatingNum[i].replace(')','')
+     album_RatingNum[i] = album_RatingNum[i].replace('人评价','')
+     #album_Name = str(album_Name)
+     album_Name[i] = album_Name[i].replace('\\n                ','_')
+     album_Name[i] = album_Name[i].replace('\\n            ','')
+     album_Name[i] = album_Name[i].replace('\\n       ','')
+     album_Name[i] = album_Name[i].replace('<span style="font-size:12px;">','')
+     album_Name[i] = album_Name[i].replace('&#39;','\'')
+     album_Name[i] = album_Name[i].replace('</span>','')
+     album_Name[i] = album_Name[i].replace('\\','')
+
+# Store clean data
+# create a dict first
+if len(album_ID) == len(album_Name) == len(album_Details) == len(album_RatingNum):
+	album_List = {
+		'album_ID': album_ID,
+		'album_Name': album_Name,
+		'album_Details': album_Details,
+		'album_RatingNum': album_RatingNum
+		}
+else:
+	album_List = {
+		'album_ID': album_ID
+	}
+	print('something going wrong with the length, but no worries :(, life sucks anyway!')
+
+# Export data
+album_List = pd.DataFrame(album_List)     # convert it into a data frame
+album_List.to_csv('.//%s_albumInfo.csv'%genre, encoding='utf-8')   #save as csv
+
+
+# part 2: get all users' rating for each album (need to use album_ID)
+
+# create an empty data frame to store the data
+cmt_list = pd.DataFrame(columns = {'album_ID':'','cmt_userID':'', 'cmt_date':'','cmt_rate':''}, index=[0])
+#error_info = pd.DataFrame(columns= {'error_ID':''}, index=[0])
+
+# request for each album's comment page
+for temp_album_ID in album_ID:
+     # request for all comment pages
+     i = 0
+     col_info = str()
+     doin_info = str()
+     # the total pages should be 200
+     while 20*i < 200:
+          # collect data in collections
+          col_URL = 'https://music.douban.com/subject/%s/collections?start=%i'%(temp_album_ID,20*i)
+          col_response = requests.get(col_URL,headers=headers)
+          time.sleep(random.random()*3)
+          col_response.encoding = 'utf-8'
+          col_html = col_response.text
+          col_info = col_info, re.findall(r'<div class="sub_ins">(.*?)<div class="paginator">',col_html,re.S)
+          # collect data from doings
+          doin_URL = 'https://music.douban.com/subject/%s/doings?start=%i'%(temp_album_ID,20*i)
+          time.sleep(random.random()*3)
+          doin_response = requests.get(doin_URL,headers=headers)
+          doin_response.encoding = 'utf-8'
+          doin_html = doin_response.text
+          doin_info = doin_info, re.findall(r'<div class="sub_ins">(.*?)<div class="paginator">',doin_html,re.S)
+          print(i)
+          i = i+1
+
+     #find specific info from the cmt_info gathered
+     cmt_info = col_info,doin_info
+     cmt_info = str(cmt_info)
+     cmt_userID = re.findall(r'<a class="" href="https://www.douban.com/people/(.*?)/"><span class="">',cmt_info)
+     cmt_date = re.findall(r'\d\d\d\d[-]\d\d[-]\d\d',cmt_info,re.S)
+     cmt_PRErate = re.findall(r'<p class="pl">(.*?)</table>',cmt_info,re.S)
+     # to add null values to missing values
+     cmt_rate = [None]*len(cmt_PRErate)
+     j = 0
+     while j < len(cmt_PRErate):
+          cmt_rate[j] = str(re.findall(r'<span class="allstar(.*?)" title',cmt_PRErate[j]))
+          cmt_rate[j] = cmt_rate[j].replace('[','')
+          cmt_rate[j] = cmt_rate[j].replace(']','')
+          cmt_rate[j] = cmt_rate[j].replace('\'','')
+          j = j+1
+
+     if len(cmt_userID)==len(cmt_date)==len(cmt_rate):
+          temp_cmt_list = {
+              'album_ID': [temp_album_ID]*len(cmt_userID),
+              'cmt_userID': cmt_userID,
+              'cmt_date': cmt_date,
+              'cmt_rate': cmt_rate
+              } 
+          temp_cmt_list = pd.DataFrame(temp_cmt_list)
+          temp_cmt_list.to_csv(".//%s_UserComment_%s.csv"%genre,temp_album_ID)
+          #cmt_list = pd.concat([cmt_list,temp_cmt_list], axis=0, ignore_index=True)
+          #temp_cmt_list.to_csv('%s_UserComment.csv'%genre)
+     else:
+          print('Please check %s'%temp_album_ID)
